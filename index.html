@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>BTC Engine Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: chart fills the screen; a tool rail on the left (bottom on phones); the engine card slides over the right. */
+:root {
+  --ground: #0e1116; --panel: #151a21; --line: #232a33; --text: #d7dce3; --muted: #8a94a3;
+  --up: #26a69a; --down: #ef5350; --amber: #e0b040; --purple: #b98be6; --gold: #ffd54f; --ghost: #9aa3ad;
+  --accent: #5aa9ff;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--ground); color: var(--text); font: 13px/1.4 var(--sans); overflow: hidden; }
+.app { display: grid; grid-template-columns: 44px 1fr; grid-template-rows: auto 1fr; height: 100%;
+  padding-top: env(safe-area-inset-top, 0px); padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px); }
+header { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 6px 10px;
+  border-bottom: 1px solid var(--line); background: var(--panel); }
+.brand { font-weight: 600; letter-spacing: .02em; }
+.price { font: 500 15px var(--mono); font-variant-numeric: tabular-nums; }
+.price.up { color: var(--up); } .price.down { color: var(--down); }
+.seg { display: flex; gap: 2px; background: var(--ground); border: 1px solid var(--line); border-radius: 6px; padding: 2px; }
+.seg button, .rail button, .chip { font: 500 12px var(--sans); color: var(--muted); background: transparent; border: 0; border-radius: 4px; padding: 4px 8px; cursor: pointer; }
+.seg button[aria-pressed="true"], .rail button[aria-pressed="true"], .chip[aria-pressed="true"] { color: var(--text); background: var(--line); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.layers { display: flex; flex-wrap: wrap; gap: 2px; }
+.status { margin-left: auto; font: 11px var(--mono); color: var(--muted); }
+.status.stale { color: var(--down); }
+.rail { display: flex; flex-direction: column; gap: 2px; padding: 6px 4px; border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto; }
+.rail button { width: 36px; height: 32px; padding: 0; display: grid; place-items: center; font-size: 15px; }
+.rail hr { width: 70%; border: 0; border-top: 1px solid var(--line); margin: 4px auto; }
+main { position: relative; min-width: 0; min-height: 0; }
+#chart { position: absolute; inset: 0; }
+.card { position: absolute; top: 8px; right: 70px; width: min(360px, calc(100% - 90px)); background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font-size: 12px; z-index: 5; }
+.card h2 { font: 600 11px var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; display: flex; justify-content: space-between; gap: 8px; }
+.card p { margin: 0 0 4px; }
+.card .todo { color: var(--text); font-weight: 500; }
+.card .foot { color: var(--muted); font-size: 11px; margin-top: 6px; }
+.toast { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; padding: 6px 12px; font-size: 12px; z-index: 6; }
+@media (max-width: 640px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; }
+  .rail { grid-row: 3; flex-direction: row; border-right: 0; border-top: 1px solid var(--line); overflow-x: auto; padding-bottom: max(6px, env(safe-area-inset-bottom, 0px)); }
+  .rail hr { width: auto; height: 70%; border-top: 0; border-left: 1px solid var(--line); margin: auto 4px; }
+  .card { right: 8px; left: 8px; width: auto; top: auto; bottom: 8px; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <span class="brand">BTC Engine Desk</span>
+    <span class="price" id="price">—</span>
+    <div class="seg" id="tf" role="group" aria-label="Timeframe">
+      <button data-tf="5m">5m</button><button data-tf="15m">15m</button><button data-tf="1h" aria-pressed="true">1H</button><button data-tf="4h">4H</button><button data-tf="1d">1D</button>
+    </div>
+    <div class="layers" id="layers" role="group" aria-label="Engine layers">
+      <button class="chip" data-layer="bands" aria-pressed="true">Bands</button>
+      <button class="chip" data-layer="levels" aria-pressed="true">Levels</button>
+      <button class="chip" data-layer="clusters" aria-pressed="true">Liq clusters</button>
+      <button class="chip" data-layer="cone" aria-pressed="true">Forecast</button>
+      <button class="chip" data-layer="vwap" aria-pressed="true">VWAP</button>
+      <button class="chip" data-layer="card" aria-pressed="true">Card</button>
+    </div>
+    <span class="status" id="status">loading…</span>
+  </header>
+  <nav class="rail" id="rail" aria-label="Drawing tools">
+    <button data-draw="segment" title="Trend line" aria-label="Trend line">╱</button>
+    <button data-draw="rayLine" title="Ray" aria-label="Ray">↗</button>
+    <button data-draw="straightLine" title="Extended line" aria-label="Extended line">⟋</button>
+    <button data-draw="horizontalStraightLine" title="Horizontal line" aria-label="Horizontal line">―</button>
+    <button data-draw="horizontalRayLine" title="Horizontal ray" aria-label="Horizontal ray">→</button>
+    <button data-draw="verticalStraightLine" title="Vertical line" aria-label="Vertical line">│</button>
+    <button data-draw="fibonacciLine" title="Fib retracement" aria-label="Fib retracement">F</button>
+    <button data-draw="priceChannelLine" title="Price channel" aria-label="Price channel">⫽</button>
+    <button data-draw="parallelStraightLine" title="Parallel lines" aria-label="Parallel lines">∥</button>
+    <button data-draw="deskBox" title="Box" aria-label="Box">▭</button>
+    <button data-draw="simpleAnnotation" title="Note" aria-label="Note">✎</button>
+    <hr>
+    <button id="undo" title="Remove last drawing" aria-label="Remove last drawing">↶</button>
+    <button id="clear" title="Remove all drawings (press twice)" aria-label="Remove all drawings">🗑</button>
+  </nav>
+  <main>
+    <div id="chart"></div>
+    <section class="card" id="card" aria-live="polite">
+      <h2><span>Engine card</span><span id="cardAge"></span></h2>
+      <div id="cardBody"><p>Waiting for the engine's latest levels…</p></div>
+      <p class="foot">Market levels only. Shadow Lab: watching, not signals.</p>
+    </section>
+    <div class="toast" id="toast" hidden></div>
+  </main>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/klinecharts@9.8.12/dist/klinecharts.min.js"></script>
+<script>
+"use strict";
+const API = "https://fapi.binance.com/fapi/v1/klines?symbol=BTCUSDT&interval=";
+const WS = "wss://fstream.binance.com/ws/btcusdt@kline_";
+const TF_MS = { "5m": 3e5, "15m": 9e5, "1h": 36e5, "4h": 144e5, "1d": 864e5 };
+const CSS = getComputedStyle(document.documentElement);
+const C = n => CSS.getPropertyValue(n).trim();
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("btcdesk." + k); return v ? JSON.parse(v) : d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("btcdesk." + k, JSON.stringify(v)); } catch {} }
+};
+const fmt = x => Number(x).toLocaleString("en-US", { maximumFractionDigits: 0 });
+let tf = store.get("tf", "1h"), ws = null, desk = null, bars = [], lastPrice = null;
+const layersOn = Object.assign({ bands: true, levels: true, clusters: true, cone: true, vwap: true, card: true }, store.get("layers", {}));
+
+// ---- engine-layer overlays (locked, not editable) ----------------------------------------------------------
+const yOf = (yAxis, v) => yAxis.convertToPixel(v);
+klinecharts.registerOverlay({
+  name: "deskBand", totalStep: 3, needDefaultPointFigure: false, needDefaultXAxisFigure: false, needDefaultYAxisFigure: false,
+  createPointFigures: ({ overlay, bounding, yAxis }) => {
+    const d = overlay.extendData, y1 = yOf(yAxis, d.hi), y2 = yOf(yAxis, d.lo);
+    const col = d.role === "supply" ? C("--down") : d.role === "demand" ? C("--up") : C("--amber");
+    return [
+      { type: "rect", attrs: { x: 0, y: Math.min(y1, y2), width: bounding.width, height: Math.max(2, Math.abs(y2 - y1)) },
+        styles: { style: "fill", color: col + "22" }, ignoreEvent: true },
+      { type: "text", attrs: { x: bounding.width - 6, y: Math.min(y1, y2) - 2, text: `${d.role.toUpperCase()} ${fmt(d.lo)}–${fmt(d.hi)}`, align: "right", baseline: "bottom" },
+        styles: { color: col, size: 11, backgroundColor: "transparent", paddingLeft: 0, paddingRight: 0 }, ignoreEvent: true }
+    ];
+  }
+});
+klinecharts.registerOverlay({
+  name: "deskLevel", totalStep: 2, needDefaultPointFigure: false, needDefaultXAxisFigure: false, needDefaultYAxisFigure: false,
+  createPointFigures: ({ overlay, bounding, yAxis }) => {
+    const d = overlay.extendData, y = yOf(yAxis, d.price);
+    return [
+      { type: "line", attrs: { coordinates: [{ x: 0, y }, { x: bounding.width, y }] },
+        styles: { color: d.color, size: 1, style: d.dashed ? "dashed" : "solid", dashedValue: [4, 3] }, ignoreEvent: true },
+      { type: "text", attrs: { x: 6, y: y - 1, text: `${d.label} ${fmt(d.price)}`, align: "left", baseline: "bottom" },
+        styles: { color: d.color, size: 10, backgroundColor: "transparent", paddingLeft: 0, paddingRight: 0 }, ignoreEvent: true }
+    ];
+  }
+});
+klinecharts.registerOverlay({
+  name: "deskClusters", totalStep: 2, needDefaultPointFigure: false, needDefaultXAxisFigure: false, needDefaultYAxisFigure: false,
+  createPointFigures: ({ overlay, bounding, yAxis }) => {
+    const rows = overlay.extendData.rows, max = Math.max(...rows.map(r => r.usd), 1), w = Math.min(140, bounding.width * 0.18);
+    const out = [];
+    for (const r of rows) {
+      const y = yOf(yAxis, r.price), len = Math.max(2, (r.usd / max) * w);
+      out.push({ type: "rect", attrs: { x: bounding.width - len, y: y - 2, width: len, height: 4 }, styles: { style: "fill", color: C("--amber") + "bb" }, ignoreEvent: true });
+      if (r.usd >= max * 0.6) out.push({ type: "text", attrs: { x: bounding.width - len - 4, y, text: `$${Math.round(r.usd / 1e6)}M`, align: "right", baseline: "middle" },
+        styles: { color: C("--amber"), size: 10, backgroundColor: "transparent", paddingLeft: 0, paddingRight: 0 }, ignoreEvent: true });
+    }
+    return out;
+  }
+});
+klinecharts.registerOverlay({
+  name: "deskCone", totalStep: 2, needDefaultPointFigure: false, needDefaultXAxisFigure: false, needDefaultYAxisFigure: false,
+  createPointFigures: ({ overlay, yAxis, barSpace }) => {
+    const d = overlay.extendData, out = [];
+    if (!chart || !bars.length) return out;
+    const lastIdx = bars.length - 1, lastT = bars[lastIdx].timestamp;
+    const x0 = chart.convertToPixel({ dataIndex: lastIdx }, { paneId: "candle_pane" }).x;
+    const xAt = t => x0 + ((t - lastT) / TF_MS[tf]) * barSpace.bar;
+    const hourX = k => xAt(d.t0 + k * 36e5);
+    const band = (lo, hi, a) => {
+      const top = [], bot = [];
+      for (let k = 0; k <= d.q[0].length; k++) {
+        const qlo = k === 0 ? d.price : d.q[lo][k - 1], qhi = k === 0 ? d.price : d.q[hi][k - 1];
+        top.push({ x: hourX(k), y: yOf(yAxis, qhi) }); bot.unshift({ x: hourX(k), y: yOf(yAxis, qlo) });
+      }
+      out.push({ type: "polygon", attrs: { coordinates: top.concat(bot) }, styles: { style: "fill", color: C("--ghost") + a }, ignoreEvent: true });
+    };
+    band(0, 4, "1c"); band(1, 3, "2e");
+    const w = Math.max(1, Math.min(barSpace.bar * (36e5 / TF_MS[tf]) * 0.6, 12));
+    (d.ghosts || []).forEach((g, k) => {
+      const x = hourX(k + 0.5), [o, h, l, c] = g;
+      out.push({ type: "line", attrs: { coordinates: [{ x, y: yOf(yAxis, h) }, { x, y: yOf(yAxis, l) }] }, styles: { color: C("--ghost"), size: 1 }, ignoreEvent: true });
+      out.push({ type: "rect", attrs: { x: x - w / 2, y: yOf(yAxis, Math.max(o, c)), width: w, height: Math.max(1, Math.abs(yOf(yAxis, o) - yOf(yAxis, c))) },
+        styles: { style: "fill", color: C("--ghost") + "aa" }, ignoreEvent: true });
+    });
+    return out;
+  }
+});
+// user box (two clicks: opposite corners)
+klinecharts.registerOverlay({
+  name: "deskBox", totalStep: 3, needDefaultPointFigure: true, needDefaultXAxisFigure: true, needDefaultYAxisFigure: true,
+  createPointFigures: ({ coordinates }) => coordinates.length < 2 ? [] : [{
+    type: "rect", attrs: { x: Math.min(coordinates[0].x, coordinates[1].x), y: Math.min(coordinates[0].y, coordinates[1].y),
+      width: Math.abs(coordinates[1].x - coordinates[0].x), height: Math.abs(coordinates[1].y - coordinates[0].y) },
+    styles: { style: "stroke_fill", color: C("--accent") + "22", borderColor: C("--accent"), borderSize: 1 } }]
+});
+// daily VWAP (anchored 00:00 UTC), computed from the candles on screen
+klinecharts.registerIndicator({
+  name: "DVWAP", shortName: "VWAP", series: "price", precision: 0, shouldOhlc: false,
+  figures: [{ key: "v", title: "VWAP ", type: "line" }],
+  styles: { lines: [{ color: "#ffd54f", size: 1 }] },
+  calc: list => { let day = null, pv = 0, vv = 0;
+    return list.map(k => { const d = Math.floor(k.timestamp / 864e5); if (d !== day) { day = d; pv = 0; vv = 0; }
+      pv += (k.high + k.low + k.close) / 3 * k.volume; vv += k.volume; return { v: vv ? pv / vv : undefined }; }); }
+});
+
+// ---- chart --------------------------------------------------------------------------------------------------
+const chart = klinecharts.init("chart", { styles: {
+  grid: { horizontal: { color: "#1b2129" }, vertical: { color: "#1b2129" } },
+  candle: { bar: { upColor: C("--up"), downColor: C("--down"), upBorderColor: C("--up"), downBorderColor: C("--down"), upWickColor: C("--up"), downWickColor: C("--down") },
+    priceMark: { last: { upColor: C("--up"), downColor: C("--down") } }, tooltip: { text: { color: C("--muted") } } },
+  xAxis: { axisLine: { color: C("--line") }, tickText: { color: C("--muted") } },
+  yAxis: { axisLine: { color: C("--line") }, tickText: { color: C("--muted") } },
+  separator: { color: C("--line") }, crosshair: { horizontal: { text: { backgroundColor: "#2a3240" } }, vertical: { text: { backgroundColor: "#2a3240" } } },
+  indicator: { tooltip: { text: { color: C("--muted") } } }
+} });
+chart.setPriceVolumePrecision(1, 3);
+chart.setOffsetRightDistance(260);
+chart.createIndicator("VOL", false, { height: 70 });
+chart.createIndicator("RSI", false, { height: 80 });
+let vwapOn = false;
+function syncVwap() {
+  if (layersOn.vwap && !vwapOn) { chart.createIndicator("DVWAP", true, { id: "candle_pane" }); vwapOn = true; }
+  if (!layersOn.vwap && vwapOn) { chart.removeIndicator("candle_pane", "DVWAP"); vwapOn = false; }
+}
+
+// ---- data ---------------------------------------------------------------------------------------------------
+const toBar = k => ({ timestamp: +k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] });
+function setStatus(t, stale) { const s = document.getElementById("status"); s.textContent = t; s.classList.toggle("stale", !!stale); }
+function showPrice(p) {
+  const el = document.getElementById("price");
+  el.textContent = fmt(p); el.className = "price " + (lastPrice == null ? "" : p >= lastPrice ? "up" : "down"); lastPrice = p;
+}
+async function loadBars() {
+  setStatus("loading " + tf + "…");
+  const r = await fetch(API + tf + "&limit=1000");
+  if (!r.ok) throw new Error("Binance answered " + r.status);
+  bars = (await r.json()).map(toBar);
+  chart.applyNewData(bars);
+  showPrice(bars[bars.length - 1].close);
+  setStatus("live · Binance perp");
+  drawEngine();
+  restoreDrawings();
+}
+function openSocket() {
+  if (ws) { ws.onclose = null; ws.close(); }
+  ws = new WebSocket(WS + tf);
+  ws.onmessage = e => { const k = JSON.parse(e.data).k; const b = { timestamp: k.t, open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v };
+    if (!bars.length || b.timestamp >= bars[bars.length - 1].timestamp) {
+      if (bars.length && b.timestamp === bars[bars.length - 1].timestamp) bars[bars.length - 1] = b; else bars.push(b);
+      chart.updateData(b); showPrice(b.close);
+    } };
+  ws.onclose = () => { setStatus("reconnecting…", true); setTimeout(openSocket, 3000); };
+  ws.onopen = () => setStatus("live · Binance perp");
+}
+async function loadDesk() {
+  try {
+    const r = await fetch("desk.json?t=" + Date.now(), { cache: "no-store" });
+    if (!r.ok) return;
+    desk = await r.json(); drawEngine(); renderCard();
+  } catch {}
+}
+
+// ---- engine layers --------------------------------------------------------------------------------------------
+function drawEngine() {
+  chart.removeOverlay({ groupId: "engine" });
+  syncVwap();
+  if (!desk || !bars.length) return;
+  const anchor = [{ timestamp: bars[bars.length - 1].timestamp, value: bars[bars.length - 1].close }];
+  const add = (name, extendData) => chart.createOverlay({ name, groupId: "engine", lock: true, points: anchor, extendData });
+  if (layersOn.bands) (desk.bands || []).forEach(b => add("deskBand", b));
+  if (layersOn.levels) (desk.levels || []).forEach(l => add("deskLevel", { ...l, color: C(l.kind === "va" ? "--purple" : l.kind === "high" ? "--amber" : l.kind === "low" ? "--accent" : "--muted"), dashed: l.kind !== "va" }));
+  if (layersOn.clusters && desk.clusters && desk.clusters.length) add("deskClusters", { rows: desk.clusters });
+  if (layersOn.cone && desk.cone) add("deskCone", { ...desk.cone, ghosts: desk.ghosts });
+}
+function renderCard() {
+  const card = document.getElementById("card");
+  card.hidden = !layersOn.card;
+  if (!desk) return;
+  const age = Math.round((Date.now() - Date.parse(desk.generated_utc)) / 60000);
+  const ageEl = document.getElementById("cardAge");
+  ageEl.textContent = age <= 90 ? `${age} min ago` : `${Math.round(age / 60)} h old`;
+  ageEl.style.color = age > 90 ? C("--down") : C("--muted");
+  const body = document.getElementById("cardBody");
+  body.replaceChildren(...(desk.card || []).map(line => { const p = document.createElement("p"); p.textContent = line; if (line.startsWith("🧭")) p.className = "todo"; return p; }));
+  if (desk.race) { const p = document.createElement("p");
+    p.textContent = `Pool race: ↑ ${fmt(desk.race.up)} / ↓ ${fmt(desk.race.down)}, up first ${Math.round(desk.race.p_up * 100)}% (distance model, being scored)`; body.append(p); }
+}
+
+// ---- drawings (saved on this device, by price and time, so they show on every timeframe) ------------------
+const mine = new Set();
+function saveDrawings() {
+  const out = [];
+  for (const id of mine) { const o = chart.getOverlayById(id); if (o) out.push({ name: o.name, points: o.points.map(p => ({ timestamp: p.timestamp, value: p.value })), extendData: o.extendData }); }
+  store.set("drawings", out);
+}
+function track(id) { if (id) mine.add(id); }
+const events = { onDrawEnd: () => { saveDrawings(); return false; }, onPressedMoveEnd: () => { saveDrawings(); return false; },
+  onRemoved: ({ overlay }) => { mine.delete(overlay.id); saveDrawings(); return false; } };
+function restoreDrawings() {
+  for (const id of mine) chart.removeOverlay(id);
+  mine.clear();
+  for (const d of store.get("drawings", [])) {
+    try { track(chart.createOverlay({ name: d.name, points: d.points, extendData: d.extendData, ...events })); } catch {}
+  }
+}
+document.getElementById("rail").addEventListener("click", e => {
+  const b = e.target.closest("button[data-draw]"); if (!b) return;
+  const name = b.dataset.draw;
+  const id = chart.createOverlay({ name, ...events, extendData: name === "simpleAnnotation" ? "note" : undefined });
+  track(id);
+  toast(name === "deskBox" ? "Click two corners" : "Click on the chart to place it");
+});
+document.getElementById("undo").addEventListener("click", () => {
+  const ids = [...mine]; const id = ids[ids.length - 1]; if (id) { chart.removeOverlay(id); mine.delete(id); saveDrawings(); }
+});
+let clearArmed = false;
+document.getElementById("clear").addEventListener("click", () => {
+  if (!clearArmed) { clearArmed = true; toast("Press again to remove all drawings"); setTimeout(() => clearArmed = false, 3000); return; }
+  for (const id of mine) chart.removeOverlay(id); mine.clear(); saveDrawings(); clearArmed = false; toast("All drawings removed");
+});
+function toast(t) { const el = document.getElementById("toast"); el.textContent = t; el.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => el.hidden = true, 2200); }
+
+// ---- controls ---------------------------------------------------------------------------------------------------
+function pressTf() { document.querySelectorAll("#tf button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.tf === tf))); }
+document.getElementById("tf").addEventListener("click", async e => {
+  const b = e.target.closest("button"); if (!b || b.dataset.tf === tf) return;
+  tf = b.dataset.tf; store.set("tf", tf); pressTf();
+  try { await loadBars(); openSocket(); } catch (err) { setStatus(err.message, true); }
+});
+document.getElementById("layers").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  const k = b.dataset.layer; layersOn[k] = !layersOn[k]; b.setAttribute("aria-pressed", String(layersOn[k])); store.set("layers", layersOn);
+  drawEngine(); renderCard();
+});
+document.querySelectorAll("#layers button").forEach(b => b.setAttribute("aria-pressed", String(layersOn[b.dataset.layer])));
+window.addEventListener("resize", () => chart.resize());
+
+(async () => {
+  pressTf();
+  try { await loadBars(); openSocket(); } catch (err) { setStatus("can't reach Binance: " + err.message, true); }
+  await loadDesk();
+  setInterval(loadDesk, 60000);
+})();
+</script>
+</body>
+</html>
